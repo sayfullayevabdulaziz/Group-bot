@@ -30,14 +30,19 @@ The bot runs on the tgcloud serverless platform (see `AGENTS.md`, `docs/tgcloud-
 
 ```
 tgcloud/
-  schema.js            users, chats, deliveries
-  handlers/message.js  command routing; calls tick() on every message
-  lib/cbu.js           fetch and parse CBU rates
-  lib/weather.js       fetch and parse Open-Meteo forecast
-  lib/format.js        Uzbek message text, weather-code map, number/date formatting
-  lib/digest.js        builds the combined weather + currency message
-  lib/tick.js          scheduler
-test/                  local Node tests for the pure modules (not deployed)
+  schema.js              users, chats, deliveries
+  handlers/message.js    command routing; calls tick() on every message
+  endpoints/tick.js      runs tick(); target of the GitHub Actions cron
+  endpoints/preview.js   returns the digest text without sending (verification)
+  lib/time.js            Tashkent time, slots, date helpers (pure)
+  lib/cbu.js             CBU URL builder and parser (pure)
+  lib/weather.js         cities, Open-Meteo URL builder and parser (pure)
+  lib/commands.js        command and argument parsing (pure)
+  lib/format.js          Uzbek message text, weather-code map, number/date formatting (pure)
+  lib/sources.js         fetch with timeout and retry (IO)
+  lib/digest.js          builds the combined weather + currency message (IO)
+  lib/tick.js            scheduler (IO)
+test/                    local Node tests for the pure modules (not deployed)
 .github/workflows/tick.yml
 ```
 
@@ -87,7 +92,7 @@ One message per slot: today's weather block followed by the currency block. The 
 `tick()` is idempotent and is called from two places:
 
 1. `handlers/message.js`, on every incoming message (the "lazy" wake-up).
-2. A GitHub Actions workflow every 5 minutes running `npx tgcloud run lib/tick`.
+2. A GitHub Actions workflow every 5 minutes running `npx tgcloud run endpoints/tick '{}'` (`tgcloud run` only accepts modules in `handlers/` and `endpoints/`; CI authenticates with the `TGCLOUD_TOKEN` environment variable, stored as a repo secret).
 
 Algorithm:
 
@@ -108,12 +113,12 @@ The slot-due computation is a pure function so it can be unit-tested.
 ## Testing
 
 - Local `node --test` tests in `test/` for the pure parts: `format.js`, CBU and Open-Meteo response parsing, Tashkent time and slot-due logic, and command argument parsing.
-- Server-side checks with `npx tgcloud run lib/digest` and `npx tgcloud run lib/tick`: confirm fetches work in the platform runtime, and that running `tick()` twice in a row sends once.
+- Server-side checks with `npx tgcloud run endpoints/preview` and `npx tgcloud run endpoints/tick`: confirm fetches work in the platform runtime, and that running `tick()` twice in a row sends once.
 
 ## Known risks to verify early
 
 - **Privacy mode.** With Telegram's default privacy mode a bot in a group sees only commands, not every message, so the lazy wake-up fires only on commands. The Actions ping is then the real scheduler. Disabling privacy mode in BotFather makes the lazy path effective.
-- **`tgcloud run` side effects and CI auth.** It is not yet confirmed that `tgcloud run` executes with real side effects (sending messages), nor how the CLI credentials in `.tgcloud/` can be supplied to CI as a secret. This is checked in the first implementation step. If it does not work, the fallback is an alternative trigger (to be re-brainstormed).
+- **`tgcloud run` side effects and CI auth.** It is not yet confirmed that `tgcloud run` executes with real side effects (sending messages, writing the DB). CI auth is known: the CLI reads `TGCLOUD_TOKEN`. Note this token can deploy code, so the repo must be private. This is checked in Task 10; if it does not work, the fallback is an alternative trigger (to be re-brainstormed).
 - **GitHub Actions timing.** Scheduled workflows can be delayed or skipped under load; the lazy path and the 3-hour window mitigate this.
 
 ## Rollout

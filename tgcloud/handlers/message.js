@@ -111,7 +111,7 @@ const COMMANDS = {
 
 export default async function (message) {
   const cmd = parseCommand(message.text);
-  const run = cmd && COMMANDS[cmd.name];
+  const run = cmd && Object.hasOwn(COMMANDS, cmd.name) && COMMANDS[cmd.name];
   if (run) {
     try {
       await run(message, cmd.args);

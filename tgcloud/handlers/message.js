@@ -1,8 +1,8 @@
 // handlers/message.js — runs on each `message` update.
 
 import { api, db } from 'sdk';
-import { eq } from 'sdk/db';
-import { users, chats } from '../schema.js';
+import { eq, desc, sql } from 'sdk/db';
+import { users, chats, deliveries } from '../schema.js';
 import { parseCommand, parseWeatherDays, parseCurrencyArgs } from '../lib/commands.js';
 import { DEFAULT_CODES } from '../lib/cbu.js';
 import { getRates, getForecast } from '../lib/sources.js';
@@ -10,6 +10,10 @@ import {
   formatCurrency, formatWeather, GREETING, STOPPED, WEATHER_HINT, ERRORS,
 } from '../lib/format.js';
 import { tick } from '../lib/tick.js';
+import { tashkentNow } from '../lib/time.js';
+import {
+  isAdmin, pageCount, parsePage, PAGE_SIZE, formatUsers, formatChats, formatStats,
+} from '../lib/admin.js';
 
 const reply = (message, text) => api.sendMessage({ chat_id: message.chat.id, text });
 
@@ -53,7 +57,57 @@ async function weather(message, args) {
   return reply(message, hint ? `${WEATHER_HINT}\n\n${text}` : text);
 }
 
-const COMMANDS = { start, stop, currency, weather };
+// Admin commands are silently ignored for everyone else (no reply at all).
+const adminOnly = (fn) => (message, args) => (isAdmin(message) ? fn(message, args) : undefined);
+
+async function listUsers(message, args) {
+  const total = await db.$count(users);
+  const pages = pageCount(total);
+  const page = parsePage(args, pages);
+  const rows = await db
+    .select()
+    .from(users)
+    .orderBy(desc(users.startedAt), desc(users.id))
+    .limit(PAGE_SIZE)
+    .offset((page - 1) * PAGE_SIZE)
+    .all();
+  return reply(message, formatUsers({ rows, total, page, pages }));
+}
+
+async function listChats(message, args) {
+  const total = await db.$count(chats);
+  const pages = pageCount(total);
+  const page = parsePage(args, pages);
+  const rows = await db
+    .select()
+    .from(chats)
+    .orderBy(desc(chats.createdAt), desc(chats.id))
+    .limit(PAGE_SIZE)
+    .offset((page - 1) * PAGE_SIZE)
+    .all();
+  return reply(message, formatChats({ rows, total, page, pages }));
+}
+
+async function showStats(message) {
+  const day = tashkentNow().day;
+  const userCount = await db.$count(users);
+  const chatCount = await db.$count(chats);
+  const claimRows = await db
+    .select({ slot: deliveries.slot, n: sql`count(*)` })
+    .from(deliveries)
+    .where(eq(deliveries.day, day))
+    .groupBy(deliveries.slot)
+    .all();
+  const claims = Object.fromEntries(claimRows.map((r) => [r.slot, Number(r.n)]));
+  return reply(message, formatStats({ users: userCount, chats: chatCount, day, claims }));
+}
+
+const COMMANDS = {
+  start, stop, currency, weather,
+  users: adminOnly(listUsers),
+  chats: adminOnly(listChats),
+  stats: adminOnly(showStats),
+};
 
 export default async function (message) {
   const cmd = parseCommand(message.text);
